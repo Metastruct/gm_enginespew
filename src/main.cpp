@@ -8,8 +8,9 @@
 #include <Color.h>
 #include <cstdio>
 #include <GarrysMod/Lua/Interface.h>
+#include <Platform.hpp>
 
-lua_State* luas = NULL;
+lua_State* luaState = NULL;
 volatile bool inspew = false; // volatile not needed but itll remind me
 
 // BELOW IS THE OLD ENGINE SPEW THAT ONLY WORKS WITH THE OLD SPEWING SYSTEM
@@ -37,11 +38,11 @@ SpewRetval_t LuaSpew(SpewType_t spewType, const char* pMsg)
 		return g_fnOldSpew(spewType, pMsg);
 
 	// no message...
-	if (!pMsg || inspew || !luas)
+	if (!pMsg || inspew || !luaState)
 		return g_fnOldSpew(spewType, pMsg);
 
 	// NOW WE ARE TALKING
-	lua_State* state = luas;
+	lua_State* state = luaState;
 
 	inspew = true;
 
@@ -101,7 +102,7 @@ void spew_hook()
 
 GMOD_MODULE_OPEN()
 {
-	luas = state;
+	luaState = state;
 
 #ifdef _WIN32
 	g_iMainThread = GetCurrentThreadId();
@@ -116,7 +117,7 @@ GMOD_MODULE_OPEN()
 
 GMOD_MODULE_CLOSE()
 {
-	luas = NULL;
+	luaState = NULL;
 	SpewOutputFunc(g_fnOldSpew);
 	return 0;
 }
@@ -133,8 +134,10 @@ public:
 
 	void Log(const LoggingContext_t* pContext, const char* pMsg) override
 	{
+		if (inspew || !luaState) return;
+
 		const CLoggingSystem::LoggingChannel_t* chan = LoggingSystem_GetChannel(pContext->m_ChannelID);
-		GarrysMod::Lua::ILuaBase* LUA = luas->luabase;
+		GarrysMod::Lua::ILuaBase* LUA = luaState->luabase;
 
 		inspew = true;
 
@@ -158,12 +161,6 @@ public:
 		LUA->PushNumber((float)Green);
 		LUA->PushNumber((float)Blue);
 
-		/*
-			lua_run hook.Add("EngineSpew","a",function(t,msg,grp,lev,r,g,b) print(...) end)
-		*/
-
-
-		// hook.Run("EngineSpew",0,"","",0,0,0,0);
 		if (LUA->PCall(8, 1, 0) != 0)
 		{
 			Warning("[EngineSpew error] %s\n", LUA->GetString());
@@ -178,7 +175,6 @@ public:
 		}
 
 		LUA->Pop(3);
-
 		inspew = false;
 	}
 };
@@ -186,7 +182,7 @@ public:
 ILoggingListener* listener = new SpewListener();
 GMOD_MODULE_OPEN()
 {
-	luas = LUA->GetState();
+	luaState = LUA->GetState();
 	LoggingSystem_RegisterLoggingListener(listener);
 
 	return 0;
@@ -197,7 +193,7 @@ GMOD_MODULE_CLOSE()
 	LoggingSystem_UnregisterLoggingListener(listener);
 	delete listener;
 
-	luas = NULL;
+	luaState = NULL;
 	return 0;
 }
 
