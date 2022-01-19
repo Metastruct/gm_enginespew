@@ -122,10 +122,8 @@ GMOD_MODULE_CLOSE()
 	return 0;
 }
 
-#endif
-
 // NEW LOGGING SYSTEM AVAILABLE IN THE X64 BRANCH AND POTENTIALLY FOR THE FORSEEABLE FUTURE
-#if ARCHITECTURE_IS_X86_64
+#elif ARCHITECTURE_IS_X86_64
 
 class SpewListener : public ILoggingListener
 {
@@ -196,5 +194,6 @@ GMOD_MODULE_CLOSE()
 	luaState = NULL;
 	return 0;
 }
-
+#else
+#error Not x86 or x64 ?????
 #endif
