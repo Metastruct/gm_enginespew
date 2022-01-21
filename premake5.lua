@@ -11,11 +11,11 @@ include(assert(_OPTIONS.gmcommon or os.getenv("GARRYSMOD_COMMON"),
 
 CreateWorkspace({name = "enginespew"})
 	CreateProject({serverside = true})
-		includedirs({"source", "include"})
+		includedirs({"src", "include"})
 		IncludeSDKCommon()
 		IncludeSDKTier0()
 
 	CreateProject({serverside = false})
-		includedirs({"source", "include"})
+		includedirs({"src", "include"})
 		IncludeSDKCommon()
 		IncludeSDKTier0()
