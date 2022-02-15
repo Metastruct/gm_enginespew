@@ -189,9 +189,8 @@ GMOD_MODULE_OPEN()
 GMOD_MODULE_CLOSE()
 {
 	LoggingSystem_UnregisterLoggingListener(listener);
-	delete listener;
-
 	luaState = NULL;
+	
 	return 0;
 }
 #else
