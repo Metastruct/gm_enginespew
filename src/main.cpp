@@ -181,6 +181,7 @@ ILoggingListener* listener = new SpewListener();
 GMOD_MODULE_OPEN()
 {
 	luaState = LUA->GetState();
+	LoggingSystem_PushLoggingState(false, false);
 	LoggingSystem_RegisterLoggingListener(listener);
 
 	return 0;
@@ -189,6 +190,7 @@ GMOD_MODULE_OPEN()
 GMOD_MODULE_CLOSE()
 {
 	LoggingSystem_UnregisterLoggingListener(listener);
+	LoggingSystem_PopLoggingState(false);
 	luaState = NULL;
 	
 	return 0;
