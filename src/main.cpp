@@ -5,7 +5,7 @@
 #endif
 
 #include <tier0/dbg.h>
-#include <Color.h>
+#include <color.h>
 #include <cstdio>
 #include <GarrysMod/Lua/Interface.h>
 #include <Platform.hpp>
