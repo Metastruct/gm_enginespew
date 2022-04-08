@@ -162,14 +162,6 @@ public:
 		if (LUA->PCall(8, 1, 0) != 0)
 		{
 			Warning("[EngineSpew error] %s\n", LUA->GetString());
-			LUA->Pop(3);
-			inspew = false;
-		}
-
-		if (LUA->IsType(-1, GarrysMod::Lua::Type::BOOL) && LUA->GetBool())
-		{
-			LUA->Pop(3);
-			inspew = false;
 		}
 
 		LUA->Pop(3);
