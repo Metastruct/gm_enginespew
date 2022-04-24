@@ -5,10 +5,14 @@
 #endif
 
 #include <tier0/dbg.h>
-#include <color.h>
 #include <cstdio>
 #include <GarrysMod/Lua/Interface.h>
 #include <Platform.hpp>
+#if ARCHITECTURE_IS_X86
+#include <Color.h>
+#elif ARCHITECTURE_IS_X86_64
+#include <color.h>
+#endif
 
 lua_State* luaState = NULL;
 volatile bool inspew = false; // volatile not needed but itll remind me
@@ -42,7 +46,7 @@ SpewRetval_t LuaSpew(SpewType_t spewType, const char* pMsg)
 		return g_fnOldSpew(spewType, pMsg);
 
 	// NOW WE ARE TALKING
-	lua_State* state = luaState;
+	GarrysMod::Lua::ILuaBase* LUA = luaState->luabase;
 
 	inspew = true;
 
@@ -102,7 +106,7 @@ void spew_hook()
 
 GMOD_MODULE_OPEN()
 {
-	luaState = state;
+	luaState = LUA->GetState();
 
 #ifdef _WIN32
 	g_iMainThread = GetCurrentThreadId();
