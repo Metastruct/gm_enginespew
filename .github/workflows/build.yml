@@ -1,0 +1,159 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.suffix }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            action: gmake
+            project_dir: projects/linux/gmake
+            gmc_ref: x86-64-support-sourcesdk
+            generator_version: 3
+            premake_version: 5.0.0-beta6
+            config: releasewithsymbols_x86_64
+            arch_dir: x86_64
+            suffix: linux64
+          - os: ubuntu-latest
+            action: gmake
+            project_dir: projects/linux/gmake
+            gmc_ref: master
+            generator_version: 2
+            premake_version: 5.0.0-beta8
+            config: releasewithsymbols_x86
+            arch_dir: x86
+            suffix: linux
+          - os: macos-latest
+            action: gmake
+            project_dir: projects/macosx/gmake
+            gmc_ref: x86-64-support-sourcesdk
+            generator_version: 3
+            premake_version: 5.0.0-beta6
+            config: releasewithsymbols_x86_64
+            arch_dir: x86_64
+            suffix: osx64
+          - os: windows-latest
+            action: vs2022
+            project_dir: projects/windows/vs2022
+            gmc_ref: x86-64-support-sourcesdk
+            generator_version: 3
+            premake_version: 5.0.0-beta6
+            config: releasewithsymbols_x86_64
+            arch_dir: x86_64
+            msbuild_platform: x64
+            suffix: win64
+          - os: windows-latest
+            action: vs2022
+            project_dir: projects/windows/vs2022
+            gmc_ref: master
+            generator_version: 2
+            premake_version: 5.0.0-beta8
+            config: releasewithsymbols_x86
+            arch_dir: x86
+            msbuild_platform: Win32
+            suffix: win32
+
+    env:
+      PREMAKE_VERSION: ${{ matrix.premake_version }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Checkout garrysmod_common
+        uses: actions/checkout@v4
+        with:
+          repository: danielga/garrysmod_common
+          ref: ${{ matrix.gmc_ref }}
+          submodules: recursive
+          path: garrysmod_common
+
+      - name: Setup premake5 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -sSL -o premake.tar.gz "https://github.com/premake/premake-core/releases/download/v${PREMAKE_VERSION}/premake-${PREMAKE_VERSION}-linux.tar.gz"
+          tar xzf premake.tar.gz
+          chmod +x premake5
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Setup premake5 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -sSL -o premake.tar.gz "https://github.com/premake/premake-core/releases/download/v${PREMAKE_VERSION}/premake-${PREMAKE_VERSION}-macosx.tar.gz"
+          tar xzf premake.tar.gz
+          chmod +x premake5
+          echo "$PWD" >> "$GITHUB_PATH"
+
+      - name: Setup premake5 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          curl.exe -sSL -o premake.zip "https://github.com/premake/premake-core/releases/download/v$env:PREMAKE_VERSION/premake-$env:PREMAKE_VERSION-windows.zip"
+          7z x premake.zip -opremake
+          "$env:GITHUB_WORKSPACE\premake" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Setup MSBuild (Windows)
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Patch SDK for macOS
+        if: runner.os == 'macOS'
+        run: |
+          sed -i '' '/files("processor_detect_linux.cpp")/d' \
+            garrysmod_common/sourcesdk-minimal/common/premake5_create_project.lua
+
+      - name: Generate project files
+        env:
+          GARRYSMOD_COMMON: ${{ github.workspace }}/garrysmod_common
+          PROJECT_GENERATOR_VERSION: ${{ matrix.generator_version }}
+        run: premake5 ${{ matrix.action }}
+
+      - name: Install 32-bit toolchain (Linux x86)
+        if: runner.os == 'Linux' && matrix.arch_dir == 'x86'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        working-directory: ${{ matrix.project_dir }}
+        run: make config=${{ matrix.config }}
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ${{ matrix.project_dir }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/macshim"
+          printf '#pragma once\n#include <stdlib.h>\n#include <malloc/malloc.h>\n' > "$RUNNER_TEMP/macshim/malloc.h"
+          FLAGS="-arch x86_64 -I$RUNNER_TEMP/macshim -DREMEMBER_ALLOC_SIZE_FOR_VALGRIND=1"
+          make config=${{ matrix.config }} \
+            CC="clang $FLAGS" \
+            CXX="clang++ $FLAGS"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ${{ matrix.project_dir }}
+        run: msbuild enginespew.sln /m /p:Configuration=ReleaseWithSymbols /p:Platform=${{ matrix.msbuild_platform }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: enginespew_${{ matrix.suffix }}
+          if-no-files-found: error
+          path: |
+            ${{ matrix.project_dir }}/${{ matrix.arch_dir }}/ReleaseWithSymbols/gmsv_enginespew_${{ matrix.suffix }}.dll
+            ${{ matrix.project_dir }}/${{ matrix.arch_dir }}/ReleaseWithSymbols/gmcl_enginespew_${{ matrix.suffix }}.dll

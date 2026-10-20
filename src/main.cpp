@@ -4,24 +4,59 @@
 #include <pthread.h>
 #endif
 
-#include <tier0/dbg.h>
-#include <cstdio>
+#include <cstdint>
 #include <GarrysMod/Lua/Interface.h>
-#include <Platform.hpp>
-#if ARCHITECTURE_IS_X86
-#include <Color.h>
-#elif ARCHITECTURE_IS_X86_64
+#include <GarrysMod/ModuleLoader.hpp>
 #include <color.h>
-#endif
+
+namespace Tier0
+{
+	typedef int32_t SpewRetval_t;
+	typedef SpewRetval_t (*SpewOutputFunc_t)(int32_t spewType, const char* pMsg);
+
+	const SpewRetval_t SPEW_CONTINUE = 1;
+
+	struct LoggingContext_t
+	{
+		int32_t m_ChannelID;
+		int32_t m_Flags;
+		int32_t m_Severity;
+		Color m_Color;
+	};
+
+	struct LoggingChannel_t
+	{
+		int32_t m_ID;
+		int32_t m_Flags;
+		int32_t m_MinimumSeverity;
+		Color m_SpewColor;
+		char m_Name[32];
+		void* m_pFirstTag;
+	};
+
+	class ILoggingListener
+	{
+	public:
+		virtual void Log(const LoggingContext_t* pContext, const char* pMessage) = 0;
+	};
+
+	static void (*Warning)(const char* pMsg, ...) = nullptr;
+
+	static void (*SpewOutputFunc)(SpewOutputFunc_t func) = nullptr;
+	static SpewOutputFunc_t (*GetSpewOutputFunc)() = nullptr;
+	static const char* (*GetSpewOutputGroup)() = nullptr;
+	static int (*GetSpewOutputLevel)() = nullptr;
+	static const Color* (*GetSpewOutputColor)() = nullptr;
+
+	static void (*LoggingSystem_RegisterLoggingListener)(ILoggingListener* pListener) = nullptr;
+	static void (*LoggingSystem_UnregisterLoggingListener)(ILoggingListener* pListener) = nullptr;
+	static void (*LoggingSystem_PushLoggingState)(bool bThreadLocal, bool bClearState) = nullptr;
+	static void (*LoggingSystem_PopLoggingState)(bool bThreadLocal) = nullptr;
+	static const LoggingChannel_t* (*LoggingSystem_GetChannel)(int32_t channelID) = nullptr;
+}
 
 lua_State* luaState = NULL;
 volatile bool inspew = false; // volatile not needed but itll remind me
-
-// BELOW IS THE OLD ENGINE SPEW THAT ONLY WORKS WITH THE OLD SPEWING SYSTEM
-// WHICH IS NOT THE SAME AS the X64 BRANCH OF GMOD
-#if ARCHITECTURE_IS_X86
-
-SpewOutputFunc_t g_fnOldSpew = NULL;
 
 // which thread
 #ifdef _WIN32
@@ -30,22 +65,17 @@ DWORD g_iMainThread;
 pthread_t g_iMainThread;
 #endif
 
-
-SpewRetval_t LuaSpew(SpewType_t spewType, const char* pMsg)
+static bool IsMainThread()
 {
-	// test for wrong thread...
 #ifdef _WIN32
-	if (GetCurrentThreadId() != g_iMainThread)
+	return GetCurrentThreadId() == g_iMainThread;
 #else
-	if (pthread_self() != g_iMainThread)
+	return pthread_equal(pthread_self(), g_iMainThread) != 0;
 #endif
-		return g_fnOldSpew(spewType, pMsg);
+}
 
-	// no message...
-	if (!pMsg || inspew || !luaState)
-		return g_fnOldSpew(spewType, pMsg);
-
-	// NOW WE ARE TALKING
+static bool RunEngineSpewHook(double type, const char* pMsg, const char* group, double level, const Color* c)
+{
 	GarrysMod::Lua::ILuaBase* LUA = luaState->luabase;
 
 	inspew = true;
@@ -55,14 +85,12 @@ SpewRetval_t LuaSpew(SpewType_t spewType, const char* pMsg)
 	LUA->GetField(-1, "Run");
 
 	LUA->PushString("EngineSpew"); // MAY TRIGGER LUA PANIC
-	LUA->PushNumber((double)spewType);
+	LUA->PushNumber(type);
 	LUA->PushString(pMsg);
-	LUA->PushString(GetSpewOutputGroup());
-	LUA->PushNumber((double)GetSpewOutputLevel());
+	LUA->PushString(group);
+	LUA->PushNumber(level);
 
 	// screw tables. Lets just push this in like this and be done with it.
-	const Color* c = GetSpewOutputColor();
-
 	int Red, Green, Blue, Alpha = 0;
 	c->GetColor(Red, Green, Blue, Alpha);
 
@@ -74,38 +102,103 @@ SpewRetval_t LuaSpew(SpewType_t spewType, const char* pMsg)
 		lua_run hook.Add("EngineSpew","a",function(t,msg,grp,lev,r,g,b) print(...) end)
 	*/
 
-
 	// hook.Run("EngineSpew",0,"","",0,0,0,0);
+	bool suppress = false;
 	if (LUA->PCall(8, 1, 0) != 0)
 	{
-		Warning("[EngineSpew error] %s\n", LUA->GetString());
-		LUA->Pop(3);
-		inspew = false;
-		return g_fnOldSpew(spewType, pMsg);
+		if (Tier0::Warning != nullptr)
+			Tier0::Warning("[EngineSpew error] %s\n", LUA->GetString());
 	}
-
-	if (LUA->IsType(-1, GarrysMod::Lua::Type::BOOL) && LUA->GetBool())
+	else
 	{
-		LUA->Pop(3);
-		inspew = false;
-		return SPEW_CONTINUE;
+		suppress = LUA->IsType(-1, GarrysMod::Lua::Type::Bool) && LUA->GetBool();
 	}
 
 	LUA->Pop(3);
-
 	inspew = false;
+
+	return suppress;
+}
+
+Tier0::SpewOutputFunc_t g_fnOldSpew = NULL;
+
+Tier0::SpewRetval_t LuaSpew(int32_t spewType, const char* pMsg)
+{
+	if (!pMsg || inspew || !luaState || !IsMainThread())
+		return g_fnOldSpew(spewType, pMsg);
+
+	bool suppress = RunEngineSpewHook(
+		(double)spewType,
+		pMsg,
+		Tier0::GetSpewOutputGroup(),
+		(double)Tier0::GetSpewOutputLevel(),
+		Tier0::GetSpewOutputColor()
+	);
+
+	if (suppress)
+		return Tier0::SPEW_CONTINUE;
 
 	return g_fnOldSpew(spewType, pMsg);
 }
 
-void spew_hook()
+class SpewListener : public Tier0::ILoggingListener
 {
-	g_fnOldSpew = GetSpewOutputFunc();
-	SpewOutputFunc(LuaSpew);
+public:
+	void Log(const Tier0::LoggingContext_t* pContext, const char* pMsg) override
+	{
+		if (!pMsg || inspew || !luaState || !IsMainThread()) return;
+
+		const Tier0::LoggingChannel_t* chan = Tier0::LoggingSystem_GetChannel(pContext->m_ChannelID);
+		RunEngineSpewHook(
+			(double)pContext->m_Flags,
+			pMsg,
+			chan->m_Name,
+			(double)pContext->m_Severity,
+			&pContext->m_Color
+		);
+	}
+};
+
+static SpewListener listener;
+static bool useLoggingSystem = false;
+
+template<typename T>
+static bool ResolveSymbol(const SourceSDK::ModuleLoader& module, T& out, const char* name)
+{
+	out = reinterpret_cast<T>(module.GetSymbol(name));
+	return out != nullptr;
+}
+
+static bool ResolveLoggingSystem(const SourceSDK::ModuleLoader& tier0)
+{
+	return
+		ResolveSymbol(tier0, Tier0::LoggingSystem_RegisterLoggingListener, "LoggingSystem_RegisterLoggingListener") &&
+		ResolveSymbol(tier0, Tier0::LoggingSystem_UnregisterLoggingListener, "LoggingSystem_UnregisterLoggingListener") &&
+		ResolveSymbol(tier0, Tier0::LoggingSystem_PushLoggingState, "LoggingSystem_PushLoggingState") &&
+		ResolveSymbol(tier0, Tier0::LoggingSystem_PopLoggingState, "LoggingSystem_PopLoggingState") &&
+		ResolveSymbol(tier0, Tier0::LoggingSystem_GetChannel, "LoggingSystem_GetChannel");
+}
+
+static bool ResolveSpew(const SourceSDK::ModuleLoader& tier0)
+{
+	return
+		ResolveSymbol(tier0, Tier0::SpewOutputFunc, "SpewOutputFunc") &&
+		ResolveSymbol(tier0, Tier0::GetSpewOutputFunc, "GetSpewOutputFunc") &&
+		ResolveSymbol(tier0, Tier0::GetSpewOutputGroup, "GetSpewOutputGroup") &&
+		ResolveSymbol(tier0, Tier0::GetSpewOutputLevel, "GetSpewOutputLevel") &&
+		ResolveSymbol(tier0, Tier0::GetSpewOutputColor, "GetSpewOutputColor");
 }
 
 GMOD_MODULE_OPEN()
 {
+	{
+		SourceSDK::ModuleLoader tier0("tier0");
+		ResolveSymbol(tier0, Tier0::Warning, "Warning");
+		useLoggingSystem = ResolveLoggingSystem(tier0);
+		if (!useLoggingSystem && !ResolveSpew(tier0))
+			LUA->ThrowError("failed to find a console output hook in tier0");
+	}
+
 	luaState = LUA->GetState();
 
 #ifdef _WIN32
@@ -114,83 +207,33 @@ GMOD_MODULE_OPEN()
 	g_iMainThread = pthread_self();
 #endif
 
-	spew_hook();
-
-	return 0;
-}
-
-GMOD_MODULE_CLOSE()
-{
-	luaState = NULL;
-	SpewOutputFunc(g_fnOldSpew);
-	return 0;
-}
-
-// NEW LOGGING SYSTEM AVAILABLE IN THE X64 BRANCH AND POTENTIALLY FOR THE FORSEEABLE FUTURE
-#elif ARCHITECTURE_IS_X86_64
-
-class SpewListener : public ILoggingListener
-{
-public:
-	SpewListener(bool bQuietPrintf = false, bool bQuietDebugger = false) {}
-
-	void Log(const LoggingContext_t* pContext, const char* pMsg) override
+	if (useLoggingSystem)
 	{
-		if (inspew || !luaState) return;
-
-		const CLoggingSystem::LoggingChannel_t* chan = LoggingSystem_GetChannel(pContext->m_ChannelID);
-		GarrysMod::Lua::ILuaBase* LUA = luaState->luabase;
-
-		inspew = true;
-
-		LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
-		LUA->GetField(-1, "hook");
-		LUA->GetField(-1, "Run");
-
-		LUA->PushString("EngineSpew"); // MAY TRIGGER LUA PANIC
-		LUA->PushNumber((double)pContext->m_Flags);
-		LUA->PushString(pMsg);
-		LUA->PushString(chan->m_Name);
-		LUA->PushNumber((double)pContext->m_Severity);
-
-		// screw tables. Lets just push this in like this and be done with it.
-		const Color* c = &pContext->m_Color;
-
-		int Red, Green, Blue, Alpha = 0;
-		c->GetColor(Red, Green, Blue, Alpha);
-
-		LUA->PushNumber((float)Red);
-		LUA->PushNumber((float)Green);
-		LUA->PushNumber((float)Blue);
-
-		if (LUA->PCall(8, 1, 0) != 0)
-		{
-			Warning("[EngineSpew error] %s\n", LUA->GetString());
-		}
-
-		LUA->Pop(3);
-		inspew = false;
+		Tier0::LoggingSystem_PushLoggingState(false, false);
+		Tier0::LoggingSystem_RegisterLoggingListener(&listener);
 	}
-};
-
-ILoggingListener* listener = new SpewListener();
-GMOD_MODULE_OPEN()
-{
-	luaState = LUA->GetState();
-	LoggingSystem_PushLoggingState(false, false);
-	LoggingSystem_RegisterLoggingListener(listener);
+	else
+	{
+		g_fnOldSpew = Tier0::GetSpewOutputFunc();
+		Tier0::SpewOutputFunc(LuaSpew);
+	}
 
 	return 0;
 }
 
 GMOD_MODULE_CLOSE()
 {
-	LoggingSystem_UnregisterLoggingListener(listener);
-	LoggingSystem_PopLoggingState(false);
+	if (useLoggingSystem)
+	{
+		Tier0::LoggingSystem_UnregisterLoggingListener(&listener);
+		Tier0::LoggingSystem_PopLoggingState(false);
+	}
+	else if (g_fnOldSpew != NULL)
+	{
+		Tier0::SpewOutputFunc(g_fnOldSpew);
+	}
+
 	luaState = NULL;
-	
+
 	return 0;
 }
-#else
-#error Not x86 or x64 ?????
-#endif

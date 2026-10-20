@@ -10,7 +10,7 @@ hook.Add("EngineSpew", "logs", function(logType, logMsg, logGroup, logLevel, red
 end)
 ```
 
-## For the x86_64 branch:
+## 64-bit builds:
 ### Building the project for linux/macos
 1) Get [premake](https://premake.github.io/download/) add it to your `PATH`
 2) Get [garrysmod_common](https://github.com/danielga/garrysmod_common) (with `git clone https://github.com/danielga/garrysmod_common --recursive --branch=x86-64-support-sourcesdk`) and set an env var called `GARRYSMOD_COMMON` to the path of the local repo
@@ -28,7 +28,7 @@ end)
 7) Build
 
 
-## For the *current (x86)* main branch:
+## 32-bit builds:
 ### Building the project for linux/macos
 1) Get [premake](https://premake.github.io/download/) add it to your `PATH`
 2) Get [garrysmod_common](https://github.com/danielga/garrysmod_common) (with `git clone https://github.com/danielga/garrysmod_common --recursive`) and set an env var called `GARRYSMOD_COMMON` to the path of the local repo
